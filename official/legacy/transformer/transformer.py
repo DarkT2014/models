@@ -36,26 +36,128 @@ from official.nlp.modeling.ops import beam_search
 
 def create_model(params, is_train):
   """Creates transformer model."""
+  '''
+  Q: 为什么要使用这个函数? 我理解直接调用Transformer的init函数就可以了啊?
+  而且不同模型对应的逻辑应该也是不同的, 因此在这里即使抽象出来一个共用的接口, 在调用时, 调用语句也会不可避免的处于不同的逻辑之中啊。
+
+
+  A: 
+  当你在训练模型时, 你需要将模型的输出与真实的目标进行比较, 并计算损失。
+  这就需要你创建一个模型, 它接受输入和目标, 输出预测结果, 并计算损失。
+  这就是create_model在is_train=True时所创建的模型。
+
+  相反, 当你在推理(预测)时, 你并不需要计算损失, 你只需要模型的预测结果。
+  因此, 你需要一个不同的模型, 它只接受输入, 输出预测结果。
+  这就是create_model在is_train=False时所创建的模型。
+
+  将这个逻辑抽象到一个函数中的好处是, 你可以在代码中多次重用这个函数, 而不需要在每次需要创建模型时都写出完整的逻辑。
+  此外, 如果你在未来需要修改模型的创建逻辑, 你只需要修改这个函数, 而不需要找出并修改代码中的所有相关部分。
+
+  
+
+  至于你提到的问题, 即不同模型的调用逻辑可能不同, 这是对的。
+  但这并不妨碍我们在创建模型时使用相同的接口。
+
+  实际上, 这正是Keras(和其他深度学习框架)的设计理念之一:
+    尽管不同的模型可能有着完全不同的内部逻辑, 但它们都可以通过相同的接口(比如fit、predict等方法)进行训练和推理。
+  这使得我们可以编写通用的训练和推理代码, 而不需要关心模型的具体实现。
+  '''
+
+
+
+  '''
+  在TensorFlow(尤其是TensorFlow 2.0和Keras API)中, 模型的构建通常分为以下几个步骤:
+
+    1 定义输入张量。在这个例子中, 输入张量是inputs和targets, 它们的形状分别为(None,), 表示它们可以是任意长度的序列。
+
+    2 创建模型的主体部分, 即神经网络的各个层。在这个例子中, 这个部分是Transformer类的实例。
+
+    3 将输入张量传递给模型的主体部分, 得到输出张量。在这个例子中, 这个操作是logits = internal_model([inputs, targets], training=is_train)。
+
+    4 如果有需要, 对输出张量进行进一步处理, 比如添加损失函数、计算评估指标等。在这个例子中, 训练逻辑的部分计算了损失函数并添加到了模型上。
+
+    5 使用tf.keras.Model类将输入张量和输出张量封装成一个完整的模型。在这个例子中, 这个操作是model = tf.keras.Model([inputs, targets], logits)。
+
+  创建好模型之后, 你可以像使用其他Keras模型一样使用它。例如, 你可以调用model.compile()来配置训练过程, 然后调用model.fit()来训练模型。
+  同样, 在推理阶段, 你可以调用model.predict()来预测新的序列。
+  '''
+
   with tf.name_scope("model"):
-    if is_train:
+    if is_train:#训练逻辑
+
+      # 1 定义输入张量。
       inputs = tf.keras.layers.Input((None,), dtype="int64", name="inputs")
+      # TensorFlow中, 将张量的某个维度设置为None意味着该维度可以是任意大小
+      # 这两个输入都是整数张量, 它们的形状为(None,), 表示它们可以是任意长度的序列
       targets = tf.keras.layers.Input((None,), dtype="int64", name="targets")
+
+
+      # 2 创建模型的主体部分, 即神经网络的各个层。
       internal_model = Transformer(params, name="transformer_v2")
+
+      #3 将输入张量传递给模型的主体部分, 得到输出张量。
       logits = internal_model([inputs, targets], training=is_train)
+      # 这一行实际上是在调用 Transformer 对象的 call 方法，将输入数据 inputs 和 targets 传递给模型，并执行前向传播操作。training 参数指示模型当前是否处于训练模式。
+
+      # 在 TensorFlow 中，模型对象（如 internal_model）可以被当作函数来调用。这是因为模型对象重载了 __call__ 特殊方法。
+      # 当你像这样调用模型对象时，实际上是在调用模型对象的 call 方法。
+      # 所以，internal_model([inputs, targets], training=is_train) 这一行实际上是在执行模型的前向传播操作
+      # ，而不是在初始化一个新的模型。
+
+
       vocab_size = params["vocab_size"]
+
+
       label_smoothing = params["label_smoothing"]
+      #   Label smoothing(标签平滑)是一种正则化技术，用于改善分类模型在训练集上的性能和泛化能力。
+      # 它通过调整分类任务中的目标标签，将原始的"one-hot"标签分布调整为更平滑的分布。
+      #   通常情况下，分类任务中的目标标签是使用"one-hot"编码表示的，即只有一个类别的标签为1，其他类别的标签都为0。
+      # 然而，这种表示方式会使得模型过于自信地预测一个类别，而忽略其他可能性。
+      #   Label smoothing 通过将目标标签中的1替换为一个较小的正数(如0.9)，并将其他标签（0）替换为一个较小的负数（如0.1/（类别数-1）），从而平滑了标签的分布。
+      #   使用标签平滑的目的是减少模型对训练集中特定样本的过拟合，提高模型的泛化能力。它可以帮助模型更加鲁棒地处理不确定性，并降低过度自信的预测。
+
       if params["enable_metrics_in_training"]:
         logits = metrics.MetricLayer(vocab_size)([logits, targets])
+        # MetricLayer 是一个自定义的 Keras 层，它的作用是在训练过程中计算一些额外的度量指标。
+        # 它接受模型的预测结果和实际的目标作为输入，然后计算这两者之间的某些度量指标（例如准确率、召回率等）。
+        # 这个层的输出仍然是模型的预测结果（即 logits），但它会将计算出的度量指标添加到模型的 metrics 列表中，以便在训练过程中进行监控。
+
+        # 这段代码对模型的预测结果和训练过程的影响可能会因情况而异。
+        # 在大多数情况下，它不会改变模型的预测结果，因为 MetricLayer 不会改变其输入的 logits。
+        # 然而，它可能会影响训练过程，因为它会将计算出的度量指标添加到模型的 metrics 列表中，这可能会改变训练过程的行为。
+        # 例如，如果你在 model.compile() 中指定了一个基于度量指标的早停回调或学习率调度器，那么这个层就可能会影响训练过程。
+
+
+
+      # 这行代码的作用是在 logits 上添加一个 Lambda 层。
+      # 这个 Lambda 层的作用是对其输入 logits 执行一个简单的函数，这个函数就是 lambda x: x，它的作用是返回其输入。
+      # 也就是说，这个 Lambda 层实际上并没有改变 logits。
+      # 这个层的存在主要是为了给 logits 添加一个名字（"logits"）和数据类型（tf.float32）。这可能是为了让模型的输出更容易被理解和使用。
       logits = tf.keras.layers.Lambda(
           lambda x: x, name="logits", dtype=tf.float32)(
               logits)
+      # logits : 模型的输出
+      
+      
+      # 5 使用tf.keras.Model类将输入张量和输出张量封装成一个完整的模型。
       model = tf.keras.Model([inputs, targets], logits)
+
+      # 计算loss, 即根据logits与targets的差距计算loss
       loss = metrics.transformer_loss(logits, targets, label_smoothing,
                                       vocab_size)
+      
+
       model.add_loss(loss)
+      #  这一行代码将计算出的损失添加到了模型的损失列表中。
+      # 在训练过程中，Keras 会自动计算这个列表中的所有损失，并将它们相加得到总损失。
+      # 然后，Keras 会使用反向传播算法优化这个总损失。
+
+      # 所以，这段代码并没有直接完成反向传播，它只是设置了模型的输入、输出和损失函数。
+      # 实际的反向传播操作是在模型训练过程中由 Keras 自动完成的。
+      # 你可以通过调用 model.fit() 方法来开始训练模型，Keras 会在每个训练步骤中自动计算损失，执行反向传播并更新模型参数。
       return model
 
-    else:
+    else:#预测逻辑
       inputs = tf.keras.layers.Input((None,), dtype="int64", name="inputs")
       internal_model = Transformer(params, name="transformer_v2")
       ret = internal_model([inputs], training=is_train)
